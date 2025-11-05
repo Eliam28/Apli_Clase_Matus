@@ -145,3 +145,106 @@ app.get("/api/products/:id", (req, res) => {
 app.listen(port, () => {
   console.log(`Server running at http://${hostname}:${port}/`);
 });
+
+// Proyecto segundo parcial
+
+app.post("/api/purchases", async (req, res) => {
+  const { user_id, status, details } = req.body;
+
+  if (
+    !user_id ||
+    !status ||
+    !details ||
+    !Array.isArray(details) ||
+    details.length === 0
+  ) {
+    return res
+      .status(400)
+      .send("Todos los campos son obligatorios y minimo un producto");
+  }
+
+  if (details.length > 5) {
+    return res.status(400).send("No se puede agregar mas de 5 productos");
+  }
+
+  const conexion = await pool.getConnection();
+  await conexion.beginTransaction();
+
+  try {
+    let totalcompra = 0;
+
+    for (const item of details) {
+      if (!item.product_id || !item.quantity || !item.price) {
+        throw new Error("Ingrese todos los campos en el detalle del producto");
+      }
+
+      const [productRows] = await conexion.query(
+        "SELECT stock FROM products WHERE id = ?",
+        [item.product_id]
+      );
+      if (productRows.length === 0) {
+        throw new Error(`El producto ${item.product_id} no existe`);
+      }
+
+      const stock = productRows[0].stock;
+      if (stock < item.quantity) {
+        throw new Error(
+          `No hay suficiente stock para el producto ${item.product_id}.`
+        );
+      }
+
+      totalcompra += item.quantity * item.price;
+    }
+
+    if (totalcompra > 3500) {
+      throw new Error("El total de la compra no puede ser mayor a 3500");
+    }
+
+    const fechaCompra = new Date();
+    const [purchaseResult] = await conexion.query(
+      "INSERT INTO purchases (user_id, total, status, purchase_date) VALUES (?, ?, ?, ?)",
+      [user_id, totalcompra, status, fechaCompra]
+    );
+
+    const purchaseId = purchaseResult.insertId;
+
+    for (const item of details) {
+      const subtotalCompra = item.quantity * item.price;
+      await conexion.query(
+        "INSERT INTO purchase_details (purchase_id, product_id, quantity, price, subtotal) VALUES (?, ?, ?, ?, ?)",
+        [purchaseId, item.product_id, item.quantity, item.price, subtotalCompra]
+      );
+
+      await conexion.query(
+        "UPDATE products SET stock = stock - ? WHERE id = ?",
+        [item.quantity, item.product_id]
+      );
+    }
+
+    await conexion.commit();
+    res.status(201).send("Compra registrada correctamente :)");
+  } catch (error) {
+    await conexion.rollback();
+    console.error(error);
+    res.status(400).send(`Error al registrar la compra :c ${error.message}`);
+  } finally {
+    conexion.release();
+  }
+});
+
+app.put("/api/purchases/:id", async (req, res) => {
+  const idCompra = req.params.id;
+  const { user_id, status, details } = req.body;
+
+  const conexion = await pool.getConnection();
+  await conexion.beginTransaction();
+
+  try {
+  } catch (error) {
+    await conexion.rollback();
+    console.error(error.message);
+    res.status(400).send(`Error al actualizar la compra :c ${error.message}`);
+  } finally {
+    conexion.release();
+  }
+});
