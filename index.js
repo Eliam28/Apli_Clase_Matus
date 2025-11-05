@@ -251,3 +251,52 @@ app.put("/api/purchases/:id", async (req, res) => {
     conexion.release();
   }
 });
+
+app.delete("/api/purchases/:id", async (req, res) => {
+  const idCompra = req.params.id;
+  const conexion = await pool.getConnection();
+  await conexion.beginTransaction();
+
+  try {
+    const [purchaseRows] = await conexion.query(
+      "SELECT * FROM purchases WHERE id = ?",
+      [idCompra]
+    );
+
+    if (purchaseRows.length === 0) {
+      throw new Error("La compra no existe");
+    }
+
+    const compraActual = purchaseRows[0];
+
+    if (compraActual.status === "COMPLETED") {
+      throw new Error("No se puede eliminar una compra en estado COMPLETED");
+    }
+
+    const [detailsRows] = await conexion.query(
+      "SELECT product_id, quantity FROM purchase_details WHERE purchase_id = ?",
+      [idCompra]
+    );
+
+    for (const item of detailsRows) {
+      await conexion.query(
+        "UPDATE products SET stock = stock + ? WHERE id = ?",
+        [item.quantity, item.product_id]
+      );
+    }
+
+    await conexion.query("DELETE FROM purchase_details WHERE purchase_id = ?", [
+      idCompra,
+    ]);
+
+    await conexion.query("DELETE FROM purchases WHERE id = ?", [idCompra]);
+    await conexion.commit();
+    res.status(200).send("Compra eliminada de forma correcta");
+  } catch (error) {
+    await conexion.rollback();
+    console.error(error.message);
+    res.status(400).send(`Error al eliminar la compra :c ${error.message}`);
+  } finally {
+    conexion.release();
+  }
+});
