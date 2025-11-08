@@ -243,6 +243,139 @@ app.put("/api/purchases/:id", async (req, res) => {
   await conexion.beginTransaction();
 
   try {
+    const [purchaseRows] = await conexion.query(
+      "SELECT * FROM purchases WHERE id = ?",
+      [idCompra]
+    );
+
+    if (purchaseRows.length === 0) {
+      throw new Error("La compra no existe");
+    }
+
+    const compraActual = purchaseRows[0];
+
+    if (compraActual.status === "COMPLETED") {
+      throw new Error("No se puede modificar una compra en estado COMPLETED");
+    }
+
+    const [oldDetails] = await conexion.query(
+      "SELECT product_id, quantity, price, subtotal FROM purchase_details WHERE purchase_id = ?",
+      [idCompra]
+    );
+
+    const detailsMap = {};
+    for (const item of oldDetails) {
+      detailsMap[item.product_id] = item;
+    }
+
+    if (details && Array.isArray(details) && details.length > 0) {
+      const productosExistentes = oldDetails.map((d) => d.product_id);
+      const nuevosIds = details.map((d) => d.product_id);
+
+      const conjuntoFinal = new Set([...productosExistentes, ...nuevosIds]);
+      if (conjuntoFinal.size > 5) {
+        throw new Error("No se pueden tener más de 5 productos en la compra");
+      }
+
+      for (const item of details) {
+        if (!item.product_id || !item.quantity || !item.price) {
+          throw new Error(
+            "Ingrese todos los campos en el detalle del producto"
+          );
+        }
+
+        const [productRows] = await conexion.query(
+          "SELECT stock FROM products WHERE id = ?",
+          [item.product_id]
+        );
+
+        if (productRows.length === 0) {
+          throw new Error(`El producto ${item.product_id} no existe`);
+        }
+
+        const stock = productRows[0].stock;
+        const subtotal = item.quantity * item.price;
+
+        if (detailsMap[item.product_id]) {
+          const oldQuantity = detailsMap[item.product_id].quantity;
+          const diferencia = item.quantity - oldQuantity;
+
+          if (diferencia > 0) {
+            if (stock < diferencia) {
+              throw new Error(
+                `No hay suficiente stock para el producto ${item.product_id}.`
+              );
+            }
+            await conexion.query(
+              "UPDATE products SET stock = stock - ? WHERE id = ?",
+              [diferencia, item.product_id]
+            );
+          }
+
+          if (diferencia < 0) {
+            await conexion.query(
+              "UPDATE products SET stock = stock + ? WHERE id = ?",
+              [Math.abs(diferencia), item.product_id]
+            );
+          }
+
+          await conexion.query(
+            "UPDATE purchase_details SET quantity = ?, price = ?, subtotal = ? WHERE purchase_id = ? AND product_id = ?",
+            [item.quantity, item.price, subtotal, idCompra, item.product_id]
+          );
+        } else {
+          if (stock < item.quantity) {
+            throw new Error(
+              `No hay suficiente stock para el producto ${item.product_id}.`
+            );
+          }
+          await conexion.query(
+            "INSERT INTO purchase_details (purchase_id, product_id, quantity, price, subtotal) VALUES (?, ?, ?, ?, ?)",
+            [idCompra, item.product_id, item.quantity, item.price, subtotal]
+          );
+
+          await conexion.query(
+            "UPDATE products SET stock = stock - ? WHERE id = ?",
+            [item.quantity, item.product_id]
+          );
+        }
+      }
+    }
+    const [newDetails] = await conexion.query(
+      "SELECT subtotal FROM purchase_details WHERE purchase_id = ?",
+      [idCompra]
+    );
+
+    const totalCompra = newDetails.reduce(
+      (acc, item) => acc + Number(item.subtotal),
+      0
+    );
+
+    if (totalCompra > 3500) {
+      throw new Error("El total de la compra no puede ser mayor a 3500");
+    }
+    const fechaNueva = new Date();
+
+    await conexion.query(
+      `
+      UPDATE purchases 
+      SET user_id = COALESCE(?, user_id),
+          status = COALESCE(?, status),
+          total = ?,
+          purchase_date = ?
+      WHERE id = ?
+      `,
+      [
+        user_id || compraActual.user_id,
+        status || compraActual.status,
+        totalCompra,
+        fechaNueva,
+        idCompra,
+      ]
+    );
+
+    await conexion.commit();
+    res.status(200).send("Compra actualizada de forma correcta");
   } catch (error) {
     await conexion.rollback();
     console.error(error.message);
