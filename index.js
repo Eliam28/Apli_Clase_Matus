@@ -433,3 +433,59 @@ app.delete("/api/purchases/:id", async (req, res) => {
     conexion.release();
   }
 });
+
+app.get("/api/purchases", async (req, res) => {
+  const conexion = await pool.getConnection();
+
+  try {
+    const [rows] = await conexion.query(`
+      SELECT 
+        p.id AS purchase_id,
+        u.name AS user,
+        p.total,
+        p.status,
+        p.purchase_date,
+        d.id AS detail_id,
+        pr.name AS product,
+        d.quantity,
+        d.price,
+        d.subtotal
+      FROM purchases p
+      INNER JOIN users u ON p.user_id = u.id
+      INNER JOIN purchase_details d ON p.id = d.purchase_id
+      INNER JOIN products pr ON d.product_id = pr.id
+      ORDER BY p.id, d.id
+    `);
+
+    const purchasesMap = {};
+
+    for (const row of rows) {
+      if (!purchasesMap[row.purchase_id]) {
+        purchasesMap[row.purchase_id] = {
+          id: row.purchase_id,
+          user: row.user,
+          total: row.total,
+          status: row.status,
+          purchase_date: row.purchase_date,
+          details: [],
+        };
+      }
+
+      purchasesMap[row.purchase_id].details.push({
+        id: row.detail_id,
+        product: row.product,
+        quantity: row.quantity,
+        price: row.price,
+        subtotal: row.subtotal,
+      });
+    }
+
+    const result = Object.values(purchasesMap);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error(error.message);
+    res.status(500).send(`Error al obtener las compras: ${error.message}`);
+  } finally {
+    conexion.release();
+  }
+});
