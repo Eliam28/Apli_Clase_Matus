@@ -489,3 +489,61 @@ app.get("/api/purchases", async (req, res) => {
     conexion.release();
   }
 });
+
+app.get("/api/purchases/:id", async (req, res) => {
+  const idCompra = req.params.id;
+  const conexion = await pool.getConnection();
+
+  try {
+    const [rows] = await conexion.query(
+      `
+      SELECT 
+        p.id AS purchase_id,
+        u.name AS user,
+        p.total,
+        p.status,
+        p.purchase_date,
+        d.id AS detail_id,
+        pr.name AS product,
+        d.quantity,
+        d.price,
+        d.subtotal
+      FROM purchases p
+      INNER JOIN users u ON p.user_id = u.id
+      INNER JOIN purchase_details d ON p.id = d.purchase_id
+      INNER JOIN products pr ON d.product_id = pr.id
+      WHERE p.id = ?
+      ORDER BY d.id
+      `,
+      [idCompra]
+    );
+
+    if (rows.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "No existe la compra con ese ID" });
+    }
+
+    const compra = {
+      id: rows[0].purchase_id,
+      user: rows[0].user,
+      total: rows[0].total,
+      status: rows[0].status,
+      purchase_date: rows[0].purchase_date,
+      details: rows.map((row) => ({
+        id: row.detail_id,
+        product: row.product,
+        quantity: row.quantity,
+        price: row.price,
+        subtotal: row.subtotal,
+      })),
+    };
+
+    res.status(200).json(compra);
+  } catch (error) {
+    console.error(error.message);
+    res.status(500).send(`Hubo un problema con:  ${error.message}`);
+  } finally {
+    conexion.release();
+  }
+});
